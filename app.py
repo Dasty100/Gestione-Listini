@@ -5,21 +5,18 @@ import io
 st.set_page_config(page_title="Gestione Listini", layout="centered")
 st.title("📋 Gestione Listini")
 
-
 def calcola_prezzo_scontato(prezzo, s1, s2, s3):
     try:
         prezzo = float(prezzo)
         return round(prezzo * (1 - s1 / 100) * (1 - s2 / 100) * (1 - s3 / 100), 2)
-    except Exception as e:
+    except Exception:
         return 0.0
-
 
 def to_excel_bytes(df):
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
         df.to_excel(writer, index=False)
     return output.getvalue()
-
 
 def mostra_tabella(nome_tab, df):
     st.subheader(f"📄 {nome_tab}")
@@ -92,15 +89,13 @@ def mostra_tabella(nome_tab, df):
         st.session_state.dati[nome_tab] = nuova_df
         st.success("✅ File aggiornato correttamente!")
 
-
-uploaded = st.file_uploader("📄 Carica un file Excel con fogli separati", type=["xlsx"])
-if uploaded:
-    try:
-        xls = pd.read_excel(uploaded, sheet_name=None)
-        st.session_state.dati = xls
-        tabs = st.tabs(list(xls.keys()))
-        for i, nome_tab in enumerate(xls):
-            with tabs[i]:
-                mostra_tabella(nome_tab, st.session_state.dati[nome_tab])
-    except Exception as e:
-        st.error(f"❌ Errore caricamento file: {e}")
+# 🔁 Caricamento automatico del file Excel incluso nel progetto
+try:
+    xls = pd.read_excel("Listino.xlsx", sheet_name=None, engine="openpyxl")
+    st.session_state.dati = xls
+    tabs = st.tabs(list(xls.keys()))
+    for i, nome_tab in enumerate(xls):
+        with tabs[i]:
+            mostra_tabella(nome_tab, st.session_state.dati[nome_tab])
+except Exception as e:
+    st.error(f"❌ Errore caricamento file di default: {e}")
