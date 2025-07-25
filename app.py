@@ -5,6 +5,7 @@ import os
 from datetime import date
 
 st.set_page_config(page_title="Listino Prezzi", layout="wide")
+st.image("logo.png", width=200)
 st.title("🧾 Listino Prezzi Web App")
 
 def safe_float(val):
