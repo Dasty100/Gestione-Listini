@@ -1,94 +1,151 @@
 import streamlit as st
 import pandas as pd
-import io
+from io import BytesIO
+import os
+from datetime import date
 
-st.set_page_config(page_title="Gestione Listini", layout="centered")
-st.title("📋 Gestione Listini")
+st.set_page_config(page_title="Listino Prezzi", layout="wide")
+st.title("🧾 Listino Prezzi Web App")
 
-def calcola_prezzo_scontato(prezzo, s1, s2, s3):
+def safe_float(val):
     try:
-        prezzo = float(prezzo)
-        return round(prezzo * (1 - s1 / 100) * (1 - s2 / 100) * (1 - s3 / 100), 2)
-    except Exception:
-        return 0.0
+        return float(val)
+    except:
+        return None
 
-def to_excel_bytes(df):
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-        df.to_excel(writer, index=False)
-    return output.getvalue()
+# 📁 Cartella per salvare i file
+SAVE_FOLDER = "listini_salvati"
+os.makedirs(SAVE_FOLDER, exist_ok=True)
 
-def mostra_tabella(nome_tab, df):
-    st.subheader(f"📄 {nome_tab}")
+# ✅ Inizializza lo stato del dettaglio
+if "dettaglio_aperto" not in st.session_state:
+    st.session_state["dettaglio_aperto"] = None
 
-    if "sconti_generali" not in st.session_state:
-        st.session_state.sconti_generali = {}
-    if nome_tab not in st.session_state.sconti_generali:
-        st.session_state.sconti_generali[nome_tab] = {"Sconto1": 0, "Sconto2": 0, "Sconto3": 0}
+# 📂 Caricamento file
+uploaded_file = st.file_uploader("Carica nuovo file Excel", type=["xlsx", "xls"])
 
-    sconti = st.session_state.sconti_generali[nome_tab]
+if uploaded_file:
+    xls = pd.ExcelFile(uploaded_file)
+    sheet = st.selectbox("Seleziona foglio", xls.sheet_names)
+    df = xls.parse(sheet)
+
+    # 💾 Salva il file con data
+    today = date.today().isoformat()
+    save_path = os.path.join(SAVE_FOLDER, f"listino_{today}.xlsx")
+    with open(save_path, "wb") as f:
+        f.write(uploaded_file.getbuffer())
+    st.success(f"✅ File salvato come: {save_path}")
+
+else:
+    # 📁 Caricamento automatico dell’ultimo file salvato
+    files = sorted(os.listdir(SAVE_FOLDER), reverse=True)
+    if files:
+        latest_file = os.path.join(SAVE_FOLDER, files[0])
+        xls = pd.ExcelFile(latest_file)
+        sheet = st.selectbox("Seleziona foglio", xls.sheet_names)
+        df = xls.parse(sheet)
+        st.info(f"📄 File aperto automaticamente: {latest_file}")
+    else:
+        st.warning("⚠️ Nessun file salvato trovato.")
+        df = None
+
+if df is not None:
+    for col in ["Prodotto", "Maglia", "Piatto"]:
+        if col in df.columns:
+            df[col] = df[col].astype(str).fillna("")
+
+    st.markdown("### 🔍 Ricerca e Filtri")
+
     col1, col2, col3 = st.columns(3)
     with col1:
-        s1 = st.number_input("Sconto Generale 1 (%)", value=sconti["Sconto1"], key=f"sg1_{nome_tab}")
+        prodotto = st.text_input("Cerca prodotto")
     with col2:
-        s2 = st.number_input("Sconto Generale 2 (%)", value=sconti["Sconto2"], key=f"sg2_{nome_tab}")
+        maglia = st.selectbox("Filtra Maglia", [""] + sorted(df["Maglia"].dropna().unique()) if "Maglia" in df.columns else [""])
     with col3:
-        s3 = st.number_input("Sconto Generale 3 (%)", value=sconti["Sconto3"], key=f"sg3_{nome_tab}")
+        piatto = st.selectbox("Filtra Piatto", [""] + sorted(df["Piatto"].dropna().unique()) if "Piatto" in df.columns else [""])
 
-    st.session_state.sconti_generali[nome_tab] = {"Sconto1": s1, "Sconto2": s2, "Sconto3": s3}
+    df_filtrato = df.copy()
 
-    ricerca = st.text_input("🔍 Cerca prodotto o maglia", key=f"search_{nome_tab}")
+    if prodotto:
+        df_filtrato = df_filtrato[df_filtrato["Prodotto"].str.contains(prodotto, case=False, na=False)]
+    if maglia:
+        df_filtrato = df_filtrato[df_filtrato["Maglia"] == maglia]
+    if piatto:
+        df_filtrato = df_filtrato[df_filtrato["Piatto"] == piatto]
 
-    nuova_df = df.copy()
-    nuova_df["Prezzo Scontato Mq Grezzo"] = nuova_df["Grezzo Mq"].apply(lambda x: calcola_prezzo_scontato(x, s1, s2, s3))
-    nuova_df["Prezzo Scontato Mq Zincato"] = nuova_df["Zincato Mq"].apply(lambda x: calcola_prezzo_scontato(x, s1, s2, s3))
+    st.markdown("### 🧮 Sconti globali")
 
-    if ricerca:
-        nuova_df = nuova_df[nuova_df.apply(lambda row: ricerca.lower() in str(row["Prodotto"]).lower() or ricerca.lower() in str(row["Maglia"]).lower(), axis=1)]
+    s1, s2, s3 = st.columns(3)
+    with s1:
+        sconto1 = st.number_input("Sconto1 (%)", value=0.0)
+    with s2:
+        sconto2 = st.number_input("Sconto2 (%)", value=0.0)
+    with s3:
+        sconto3 = st.number_input("Sconto3 (%)", value=0.0)
 
-    for idx, row in nuova_df.iterrows():
-        with st.expander(f'📌 {row["Prodotto"]} - {row["Maglia"]}'):
+    sconto_totale = sconto1 + sconto2 + sconto3
+
+    if "Grezzo Mq" in df_filtrato.columns:
+        df_filtrato["Prezzo Scontato Mq Grezzo"] = df_filtrato["Grezzo Mq"].apply(
+            lambda x: round(safe_float(x) * (1 - sconto_totale / 100), 2) if safe_float(x) is not None else x
+        )
+
+    if "Zincato Mq" in df_filtrato.columns:
+        df_filtrato["Prezzo Scontato Mq Zincato"] = df_filtrato["Zincato Mq"].apply(
+            lambda x: round(safe_float(x) * (1 - sconto_totale / 100), 2) if safe_float(x) is not None else x
+        )
+
+    st.markdown("### 📋 Prodotti (prime 50 righe)")
+    for i, row in df_filtrato.head(50).iterrows():
+        cols = st.columns([7, 1])
+        with cols[0]:
+            st.write(f"**{row['Prodotto']}** | Maglia: {row.get('Maglia', '')} | Piatto: {row.get('Piatto', '')} | Dim: {row.get('Dimensione', '')} | GR: {row.get('Kg/Mq GR.', '')} | ZN: {row.get('Kg/Mq ZN.', '')} | Grezzo: {row.get('Grezzo Mq', '')} | Zincato: {row.get('Zincato Mq', '')}")
+        with cols[1]:
+            if st.button("🔍 Dettaglio", key=f"modifica_{i}"):
+                if st.session_state["dettaglio_aperto"] == i:
+                    st.session_state["dettaglio_aperto"] = None
+                else:
+                    st.session_state["dettaglio_aperto"] = i
+
+        if st.session_state["dettaglio_aperto"] == i:
+            st.markdown(f"#### 📄 Dettaglio: {row['Prodotto']}")
+
+            st.write(f"**Maglia:** {row.get('Maglia', '')}")
+            st.write(f"**Piatto:** {row.get('Piatto', '')}")
+            st.write(f"**Dimensione:** {row.get('Dimensione', '')}")
+            st.write(f"**Kg/Mq GR.:** {row.get('Kg/Mq GR.', '')}")
+            st.write(f"**Kg/Mq ZN.:** {row.get('Kg/Mq ZN.', '')}")
+            st.write(f"**Grezzo Mq:** {row.get('Grezzo Mq', '')}")
+            st.write(f"**Zincato Mq:** {row.get('Zincato Mq', '')}")
+            
+
             col1, col2, col3 = st.columns(3)
             with col1:
-                s1p = st.number_input("Sconto 1 (%)", value=float(row["Sconto1"]), key=f"s1_{idx}")
+                s1_val = st.number_input("Sconto1 (prodotto)", value=safe_float(row.get("Sconto1", 0)), key=f"s1_{i}")
             with col2:
-                s2p = st.number_input("Sconto 2 (%)", value=float(row["Sconto2"]), key=f"s2_{idx}")
+                s2_val = st.number_input("Sconto2 (prodotto)", value=safe_float(row.get("Sconto2", 0)), key=f"s2_{i}")
             with col3:
-                s3p = st.number_input("Sconto 3 (%)", value=float(row["Sconto3"]), key=f"s3_{idx}")
+                s3_val = st.number_input("Sconto3 (prodotto)", value=safe_float(row.get("Sconto3", 0)), key=f"s3_{i}")
 
-            nuova_df.at[idx, "Sconto1"] = s1p
-            nuova_df.at[idx, "Sconto2"] = s2p
-            nuova_df.at[idx, "Sconto3"] = s3p
+            sconto_riga = s1_val + s2_val + s3_val
 
-            nuova_df.at[idx, "Prezzo Scontato Mq Grezzo"] = calcola_prezzo_scontato(row["Grezzo Mq"], s1p, s2p, s3p)
-            nuova_df.at[idx, "Prezzo Scontato Mq Zincato"] = calcola_prezzo_scontato(row["Zincato Mq"], s1p, s2p, s3p)
+            grezzo_val = safe_float(row.get("Grezzo Mq", 0))
+            zincato_val = safe_float(row.get("Zincato Mq", 0))
 
-            st.success(f'💰 Prezzo Grezzo: {nuova_df.at[idx, "Prezzo Scontato Mq Grezzo"]} €/Mq')
-            st.success(f'💰 Prezzo Zincato: {nuova_df.at[idx, "Prezzo Scontato Mq Zincato"]} €/Mq')
+            prezzo_grezzo = round(grezzo_val * (1 - sconto_riga / 100), 2) if grezzo_val is not None else "-"
+            prezzo_zincato = round(zincato_val * (1 - sconto_riga / 100), 2) if zincato_val is not None else "-"
 
-    st.dataframe(nuova_df, use_container_width=True)
+            st.success(f"💰 Prezzo Scontato Mq Grezzo: **{prezzo_grezzo}**")
+            st.success(f"💰 Prezzo Scontato Mq Zincato: **{prezzo_zincato}**")
 
-    st.download_button("⬇️ Esporta in Excel", to_excel_bytes(nuova_df), file_name=f"{nome_tab}.xlsx")
+    st.markdown("### 💾 Esporta file aggiornato")
+    buffer = BytesIO()
+    df_filtrato.to_excel(buffer, index=False, engine='openpyxl')
+    buffer.seek(0)
 
-    if st.button("➕ Aggiungi Nuovo Prodotto", key=f"add_{nome_tab}"):
-        nuova_riga = {col: "" for col in df.columns}
-        nuova_df = pd.concat([nuova_df, pd.DataFrame([nuova_riga])], ignore_index=True)
-        st.session_state.dati[nome_tab] = nuova_df
-        st.experimental_rerun()
-
-    if st.button("💾 Salva File", key=f"save_{nome_tab}"):
-        st.session_state.dati[nome_tab] = nuova_df
-        st.success("✅ File aggiornato correttamente!")
-
-uploaded = st.file_uploader("📄 Carica un file Excel con fogli separati", type=["xlsx"])
-
-if uploaded:
-    try:
-        xls = pd.read_excel(uploaded, sheet_name=None)
-        st.session_state.dati = xls
-        tabs = st.tabs(list(xls.keys()))
-        for i, nome_tab in enumerate(xls):
-            with tabs[i]:
-                mostra_tabella(nome_tab, st.session_state.dati[nome_tab])
-    except Exception as e:
-        st.error(f"❌ Errore caricamento file: {e}")
+    st.download_button(
+        label="📥 Scarica Excel",
+        data=buffer,
+        file_name="listino_aggiornato.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
